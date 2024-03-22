@@ -1,0 +1,11 @@
+block_size = 4096
+corpus = "test_data/corpus"
+
+[scenarios.nonfragmented]
+path = "test_data/stoneblock_nonfragmented.dat"
+files = [
+	{ path = "3.png", fragments = 1 },
+	{ path = "7.zip", fragments = 1 },
+	{ path = "9.png", fragments = 1 },
+]
+layout = "1.1, 2.1, R, Z"
