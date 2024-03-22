@@ -1,38 +1,17 @@
+mod fragments;
+mod config;
+mod readers;
+mod layout;
+
 // TODO: Remove the bodgy stuff like the absolute mess of unwraps
 
-use std::{collections::HashMap, env::args, fs::{self, File}, io::{self, Seek, SeekFrom, Write}, rc::Rc};
+use std::{collections::{BTreeMap, HashMap}, env::args, fs::{self, File}, hash::Hash, io::{self, Seek, SeekFrom, Write}, rc::Rc};
 
+use fragments::Fragment;
 use serde::Deserialize;
 use tinyrand::{Rand, StdRand};
 
-#[derive(Debug, Deserialize)]
-struct Config {
-	block_size: u32,
-	corpus: String,
-	scenarios: HashMap<String, ConfigScenario>
-}
-
-#[derive(Debug, Deserialize)]
-struct ConfigScenario {
-	/// Relative to corpus
-	path: String,
-	files: Vec<ConfigFile>,
-	layout: String
-}
-
-#[derive(Debug, Deserialize)]
-struct ConfigFile {
-	path: String, // TODO: Make Option<String> and randomly select a file?
-	fragments: u32
-}
-
-trait Fragment {
-	/// Returns the length of the fragment, in bytes
-	fn len(&self) -> usize;
-	/// Writes the fragment's data to the given file. Should not keep any file data loaded, to avoid excessive memory consumption.
-	/// Returns the number of bytes written (this should normally be the same as the length of the fragment)
-	fn write(&self, output_file: &mut File) -> io::Result<usize>;
-}
+use crate::{config::{Config, ConfigFile}, fragments::{fragment, RandomFragment}};
 
 struct Scenario {
 	path: String,
@@ -53,6 +32,30 @@ fn main() {
 	let config: Config = toml::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
 
 	println!("Config: {config:?}");
+
+	let mut images: HashMap<String, Vec<Rc<dyn Fragment>>> = HashMap::new();
+
+	for (_, scenario) in config.scenarios {
+		let mut scenario_file_frags = Vec::new();
+
+		for cfg_file in scenario.files {
+			let mut file_frags = fragment(cfg_file.path, cfg_file.fragments, config.block_size);
+
+			scenario_file_frags.append(&mut file_frags)
+		}
+
+		// TODO: Put fragments in layout order
+
+		images.entry(scenario.path.clone()).and_modify(|e| {
+			// e.append(&mut file_frags)
+			todo!()
+		}).or_insert_with(|| {
+			// file_frags
+			todo!()
+		});
+	}
+
+	// TODO: Write images
 
 	todo!(); // TODO: Adapt the below code to use the config file to generate test images, and also write a report of where fragments are etc., like woodblock does (but we're gonna do it correctly)
 
