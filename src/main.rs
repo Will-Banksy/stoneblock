@@ -20,6 +20,8 @@ struct Scenario {
 
 #[derive(Serialize)]
 struct ImageMetadata {
+	block_size: u64,
+	corpus: String,
 	scenarios: Vec<ScenarioMetadata>
 }
 
@@ -30,8 +32,8 @@ struct ScenarioMetadata {
 }
 
 #[derive(Serialize)]
-struct FragmentMetadata {
-	source: String,
+struct FragmentMetadata { // TODO: Perhaps calculate hashes of fragments
+	source: String, // TODO: Perhaps separate out source and source type, to avoid any ambiguity between a source type and a file path
 	length: u64,
 	source_offset: u64,
 	image_offset: u64
@@ -45,7 +47,7 @@ fn main() {
 
 	let config: Config = toml::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
 
-	println!("Config: {config:?}");
+	eprintln!("Config: {config:?}");
 
 	let mut images: HashMap<String, Vec<Scenario>> = HashMap::new();
 	let mut offsets: HashMap<String, u64> = HashMap::new();
@@ -142,6 +144,8 @@ fn main() {
 		let mut offset = 0;
 
 		let mut image_meta = ImageMetadata {
+			block_size: config.block_size,
+			corpus: config.corpus.clone(),
 			scenarios: Vec::new()
 		};
 
@@ -149,12 +153,12 @@ fn main() {
 			let mut frags_meta = Vec::new();
 
 			for mut fragment in scenario.fragments {
-				Rc::get_mut(&mut fragment).unwrap().write(&mut output_file).unwrap();
+				dyn_clone::rc_make_mut(&mut fragment).write(&mut output_file).unwrap();
 
 				frags_meta.push(FragmentMetadata {
-					source: String::new(), // TODO: Source,
+					source: fragment.source(),
 					length: fragment.len(),
-					source_offset: 0, // TODO: Source offset,
+					source_offset: fragment.source_offset(),
 					image_offset: offset
 				});
 
@@ -175,4 +179,6 @@ fn main() {
 			&serde_json::to_string(&image_meta).unwrap()
 		}).unwrap();
 	}
+
+	eprintln!("Images written successfully");
 }

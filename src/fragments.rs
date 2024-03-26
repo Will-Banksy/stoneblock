@@ -1,12 +1,17 @@
-use std::{fs::File, io::{self, BufReader, BufWriter, Read, Seek, SeekFrom}, rc::Rc};
+use std::{fs::{self, File}, io::{self, BufReader, BufWriter, Read, Seek, SeekFrom}, rc::Rc};
 
+use dyn_clone::DynClone;
 use tinyrand::StdRand;
 
 use crate::readers::{RandReader, ZeroReader};
 
-pub trait Fragment {
+pub trait Fragment: DynClone {
 	/// Returns the length of the fragment, in bytes
 	fn len(&self) -> u64;
+	/// Returns a string representing the source of the fragment - This is usually a file path or string such as "random"
+	fn source(&self) -> String;
+	/// Returns the offset into the source, if that is relevant. Otherwise, returns 0
+	fn source_offset(&self) -> u64;
 	/// Writes the fragment's data to the given file. Should not keep any file data loaded, to avoid excessive memory consumption.
 	/// Returns the number of bytes written (this should normally be the same as the length of the fragment)
 	fn write(&mut self, output_file: &mut File) -> io::Result<u64>;
@@ -47,6 +52,7 @@ pub fn fragment(path: String, num_frags: u32, block_size: u64) -> Vec<Rc<dyn Fra
 	frags
 }
 
+#[derive(Clone)]
 pub struct ZeroedFragment {
 	len: u64
 }
@@ -56,6 +62,7 @@ pub struct RandomFragment {
 	len: u64
 }
 
+#[derive(Clone)]
 pub struct FileFragment {
 	path: String,
 	start: u64,
@@ -73,6 +80,14 @@ impl ZeroedFragment {
 impl Fragment for ZeroedFragment {
 	fn len(&self) -> u64 {
 		self.len
+	}
+
+	fn source(&self) -> String {
+		"zeroes".to_string()
+	}
+
+	fn source_offset(&self) -> u64 {
+		0
 	}
 
 	fn write(&mut self, output_file: &mut File) -> io::Result<u64> {
@@ -93,9 +108,26 @@ impl RandomFragment {
 	}
 }
 
+impl Clone for RandomFragment {
+	fn clone(&self) -> Self {
+		RandomFragment {
+			len: self.len,
+			rng: StdRand::default()
+		}
+	}
+}
+
 impl Fragment for RandomFragment {
 	fn len(&self) -> u64 {
 		self.len
+	}
+
+	fn source(&self) -> String {
+		"random".to_string()
+	}
+
+	fn source_offset(&self) -> u64 {
+		0
 	}
 
 	fn write(&mut self, output_file: &mut File) -> io::Result<u64> {
@@ -110,6 +142,14 @@ impl Fragment for RandomFragment {
 impl Fragment for FileFragment {
 	fn len(&self) -> u64 {
 		self.end - self.start
+	}
+
+	fn source(&self) -> String { // TODO: This would perhaps be nicer if it returned the path relative to the corpus
+		fs::canonicalize(self.path.clone()).unwrap().to_str().unwrap().to_string()
+	}
+
+	fn source_offset(&self) -> u64 {
+		self.start
 	}
 
 	fn write(&mut self, output_file: &mut File) -> io::Result<u64> {

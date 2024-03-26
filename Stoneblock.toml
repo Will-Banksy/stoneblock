@@ -7,6 +7,8 @@ files = [
 	{ path = "3.png", fragments = 1 },
 	{ path = "7.zip", fragments = 1 },
 	{ path = "9.png", fragments = 1 },
+	{ path = "files.jpg", fragments = 1 },
+	{ path = "g6-1.jpg", fragments = 1 }
 ]
 filler = "R"
-layout = "1.1, 2.1, R, Z"
+layout = "Z, 1.1, 2.1, 2.1, 3.1, Z, Z, 1.1, 4.1, R, 5.1"
