@@ -14,6 +14,7 @@ pub struct ConfigScenario {
 	/// Relative to corpus
 	pub path: String,
 	pub files: Vec<ConfigFile>,
+	pub filler: String,
 	pub layout: String
 }
 

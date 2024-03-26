@@ -2,20 +2,39 @@ mod fragments;
 mod config;
 mod readers;
 mod layout;
+mod utils;
 
-// TODO: Remove the bodgy stuff like the absolute mess of unwraps
+// TODO: Remove the bodgy stuff like the absolute mess of unwraps, panics, etc.
 
-use std::{collections::{BTreeMap, HashMap}, env::args, fs::{self, File}, hash::Hash, io::{self, Seek, SeekFrom, Write}, rc::Rc};
+use std::{collections::HashMap, env::args, fs::{self, File}, rc::Rc};
 
 use fragments::Fragment;
-use serde::Deserialize;
-use tinyrand::{Rand, StdRand};
+use serde::Serialize;
 
-use crate::{config::{Config, ConfigFile}, fragments::{fragment, RandomFragment}};
+use crate::{config::Config, fragments::{fragment, RandomFragment, ZeroedFragment}, layout::LayoutItem, utils::next_multiple_of};
 
 struct Scenario {
-	path: String,
-	layout: Vec<Rc<dyn Fragment>>
+	name: String,
+	fragments: Vec<Rc<dyn Fragment>>
+}
+
+#[derive(Serialize)]
+struct ImageMetadata {
+	scenarios: Vec<ScenarioMetadata>
+}
+
+#[derive(Serialize)]
+struct ScenarioMetadata {
+	name: String,
+	fragments: Vec<FragmentMetadata>
+}
+
+#[derive(Serialize)]
+struct FragmentMetadata {
+	source: String,
+	length: u64,
+	source_offset: u64,
+	image_offset: u64
 }
 
 fn main() {
@@ -24,68 +43,136 @@ fn main() {
 		None => panic!("Path to config file should be supplied as first argument")
 	};
 
-	let output_path = match args().nth(2) {
-		Some(arg) => arg,
-		None => panic!("Path to output file should be supplied as second argument")
-	};
-
 	let config: Config = toml::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
 
 	println!("Config: {config:?}");
 
-	let mut images: HashMap<String, Vec<Rc<dyn Fragment>>> = HashMap::new();
+	let mut images: HashMap<String, Vec<Scenario>> = HashMap::new();
+	let mut offsets: HashMap<String, u64> = HashMap::new();
 
-	for (_, scenario) in config.scenarios {
+	for (scenario_name, scenario) in config.scenarios {
+		// A vec of vecs of fragments for each file index
 		let mut scenario_file_frags = Vec::new();
 
 		for cfg_file in scenario.files {
-			let mut file_frags = fragment(cfg_file.path, cfg_file.fragments, config.block_size);
+			let file_frags = fragment(utils::path_concat(&config.corpus, &cfg_file.path), cfg_file.fragments, config.block_size);
 
-			scenario_file_frags.append(&mut file_frags)
+			scenario_file_frags.push(file_frags);
 		}
 
-		// TODO: Put fragments in layout order
+		// Get the layout
+		let layout = layout::parse_layout_str(&scenario.layout).unwrap();
+
+		// Get the current offset in the file
+		let mut curr_offset = if let Some(&offset) = offsets.get(&scenario.path) {
+			offset
+		} else {
+			0
+		};
+
+		// Map the layout items to fragments, using the fill type to fill between files so that all files are allocated starting on cluster boundaries (padding is not automatically inserted)
+		let fragments: Vec<Rc<dyn Fragment>> = layout.iter()
+			.flat_map(|li| {
+				match li {
+					LayoutItem::Zeroed => {
+						let frag_len = next_multiple_of(curr_offset, config.block_size) - curr_offset;
+						curr_offset += frag_len;
+						vec![
+							Rc::new(ZeroedFragment::new(frag_len)) as Rc<dyn Fragment>
+						]
+					}
+					LayoutItem::Random => {
+						let frag_len = next_multiple_of(curr_offset, config.block_size) - curr_offset;
+						curr_offset += frag_len;
+						vec![
+							Rc::new(RandomFragment::new(frag_len)) as Rc<dyn Fragment>
+						]
+					}
+					LayoutItem::File { file_idx, fragment_idx } => {
+						let file_frag = Rc::clone(
+							&scenario_file_frags
+								.get(*file_idx - 1).expect(&format!("Error: File of index {file_idx} does not exist ({scenario_name})"))
+								.get(*fragment_idx - 1).expect(&format!("Error: Fragment of index {fragment_idx} in {file_idx} does not exist ({scenario_name})"))
+						);
+						if curr_offset % config.block_size != 0 {
+							let filler_len = next_multiple_of(curr_offset, config.block_size) - curr_offset;
+							let filler_frag = match scenario.filler.as_ref() {
+								"Z" => Rc::new(ZeroedFragment::new(filler_len)) as Rc<dyn Fragment>,
+								"R" => Rc::new(RandomFragment::new(filler_len)) as Rc<dyn Fragment>,
+								value => panic!("Error: Invalid value for \"filler\" in config: {value} (should be \"Z\" or \"R\")")
+							};
+
+							curr_offset += filler_len + file_frag.len();
+							vec![
+								filler_frag,
+								file_frag
+							]
+						} else {
+							curr_offset += file_frag.len();
+							vec![
+								file_frag
+							]
+						}
+					}
+				}
+			})
+			.collect();
 
 		images.entry(scenario.path.clone()).and_modify(|e| {
-			// e.append(&mut file_frags)
-			todo!()
+			e.push(Scenario {
+				name: scenario_name.clone(),
+				fragments: fragments.clone() // TODO: Optimise out this unnecessary copy
+			});
 		}).or_insert_with(|| {
-			// file_frags
-			todo!()
+			vec![
+				Scenario {
+					name: scenario_name,
+					fragments
+				}
+			]
 		});
+
+		offsets.entry(scenario.path.clone()).and_modify(|off| {
+			*off += curr_offset
+		}).or_insert(curr_offset);
 	}
 
-	// TODO: Write images
+	for (path, scenarios) in images {
+		let mut output_file = File::create(&path).unwrap();
+		let mut offset = 0;
 
-	todo!(); // TODO: Adapt the below code to use the config file to generate test images, and also write a report of where fragments are etc., like woodblock does (but we're gonna do it correctly)
+		let mut image_meta = ImageMetadata {
+			scenarios: Vec::new()
+		};
 
-	/*
-	let mut output_file = File::create(&output_path).unwrap();
+		for scenario in scenarios {
+			let mut frags_meta = Vec::new();
 
-	let mut rand_data: Vec<u8> = vec![0; 1024];
+			for mut fragment in scenario.fragments {
+				Rc::get_mut(&mut fragment).unwrap().write(&mut output_file).unwrap();
 
-	let mut rng = StdRand::default();
+				frags_meta.push(FragmentMetadata {
+					source: String::new(), // TODO: Source,
+					length: fragment.len(),
+					source_offset: 0, // TODO: Source offset,
+					image_offset: offset
+				});
 
-	for dir_entry in fs::read_dir(config.corpus).unwrap() {
-		// Fill an amount of the output file with random data
-		rand_data.chunks_exact_mut(4).for_each(|b| unsafe { *(b.as_mut_ptr() as *mut u32) = rng.next_u32() });
-		let amt_rand = rng.next_lim_u32(1023);
-		let written = output_file.write(&rand_data[0..amt_rand as usize]).unwrap();
-		output_file.seek(SeekFrom::Current(written as i64)).unwrap();
+				offset += fragment.len();
+			}
 
-		// Read the current directory entry (if it is a file) and appends that data to the output file
-		// TODO: Introduce fragmentation, partially erase files, etc. for some more variation
-		//       Also make sure the entire file is erased before writing to it - currently we're just
-		//       overwriting the previous data, but if the previous data was longer than the current data,
-		//       it will remain at the end of the file
-		let dir_entry = dir_entry.unwrap();
-		if dir_entry.metadata().unwrap().is_file() {
-			let curr_fidx = output_file.seek(SeekFrom::Current(0)).unwrap();
-			let file_data = fs::read(dir_entry.path()).unwrap();
-			println!("Copying {} ({} bytes) into output file at idx {}", dir_entry.path().display(), file_data.len(), curr_fidx);
-			let written = output_file.write(&file_data).unwrap();
-			output_file.seek(SeekFrom::Current(written as i64)).unwrap();
+			image_meta.scenarios.push(
+				ScenarioMetadata {
+					name: scenario.name,
+					fragments: frags_meta
+				}
+			);
 		}
+
+		// Write out image metadata
+		let metadata_path = format!("{path}.json");
+		fs::write(metadata_path, {
+			&serde_json::to_string(&image_meta).unwrap()
+		}).unwrap();
 	}
-	*/
 }

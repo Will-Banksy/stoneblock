@@ -1,6 +1,6 @@
 use std::{fs::File, io::{self, BufReader, BufWriter, Read, Seek, SeekFrom}, rc::Rc};
 
-use tinyrand::{Seeded, StdRand};
+use tinyrand::StdRand;
 
 use crate::readers::{RandReader, ZeroReader};
 
