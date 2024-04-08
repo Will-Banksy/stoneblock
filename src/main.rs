@@ -175,8 +175,13 @@ fn main() {
 
 		// Write out image metadata
 		let metadata_path = format!("{path}.json");
+		let mut buf = Vec::new();
+		let formatter = serde_json::ser::PrettyFormatter::with_indent(b"\t");
+		let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
+		image_meta.serialize(&mut ser).unwrap();
 		fs::write(metadata_path, {
-			&serde_json::to_string(&image_meta).unwrap()
+			// &serde_json::to_string_pretty(&image_meta).unwrap()
+			&buf
 		}).unwrap();
 	}
 
