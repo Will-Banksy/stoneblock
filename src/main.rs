@@ -135,7 +135,7 @@ fn main() {
 		});
 
 		offsets.entry(scenario.path.clone()).and_modify(|off| {
-			*off += curr_offset
+			*off = curr_offset
 		}).or_insert(curr_offset);
 	}
 
@@ -161,6 +161,8 @@ fn main() {
 					source_offset: fragment.source_offset(),
 					image_offset: offset
 				});
+
+				// assert!(!(offset % config.block_size != 0 && fragment.source() != "zeroes" && fragment.source() != "random"));
 
 				offset += fragment.len();
 			}
